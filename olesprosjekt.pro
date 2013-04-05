@@ -8,14 +8,20 @@ SOURCES += main.cpp \
     cell.cpp \
     generatequantities.cpp \
     potentials.cpp \
-    lib.cpp
+    lib.cpp \
+    pressurecells.cpp \
+    flowprofilecells.cpp
+
+LIBS += -larmadillo  -llapack -lblas
 
 HEADERS += \
     atom.h \
     cell.h \
     generatequantities.h \
     potentials.h \
-    lib.h
+    lib.h \
+    pressurecells.h \
+    flowprofilecells.h
 
 release {
     DEFINES += ARMA_NO_DEBUG

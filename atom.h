@@ -15,6 +15,7 @@ public:
     vec3 getPosition();
     vec3 getVelocity();
     vec3 getForce();
+    bool ismoving;
     void setPosition(const vec &inPosition);
     void setVelocity(const vec &inVelocity);
     void setForce(const vec &inForce);

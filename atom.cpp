@@ -45,7 +45,6 @@ double Atom::getPotential()
     return potential;
 }
 
-
 double Atom::getPressure()
 {
     return pressure;
@@ -56,12 +55,10 @@ void Atom::setPotential(double inPotential)
     potential += inPotential;
 }
 
-
 double Atom::getKinetic()
 {
     return kinetic;
 }
-
 
 void Atom::setPressure(double inPressure)
 {
@@ -73,12 +70,10 @@ vec3 Atom::getDisplacement()
     return d;
 }
 
-
 void Atom::setKinetic(double inKinetic)
 {
     kinetic = inKinetic;
 }
-
 
 void Atom::setDisplacement(const vec &inDisplacement)
 {

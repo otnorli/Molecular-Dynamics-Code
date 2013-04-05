@@ -21,6 +21,8 @@ int main()
 
     string command = "rm Argon6.xyz";
     system(command.c_str());
+    command = "rm Pressure.txt";
+    system(command.c_str());
 
     string thermostat = "noThermostat";
     string thermostat1 = "Berendsen";
@@ -36,3 +38,4 @@ int main()
     double dif = difftime (end,start);
     printf ("Elasped time is %.2lf minutes.", dif/60 );
 }
+

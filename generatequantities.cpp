@@ -10,8 +10,14 @@ GenerateQuantities::GenerateQuantities(string Termostat)
     atom_name = "Ar";
     m = 39.948; //amu
     k_b = 1.3806503 * pow(10.0, -23.0);
-    //b = 5.260;
-    b = 5.72;
+    //b = 5.260; //Prosjekt 1
+    b = 5.72; //Prosjekt 2
+
+    //Input half density eller ikke
+    half_density = true;
+
+    if (half_density == true){
+        b = b * pow(2.0, 1.0/3.0);}
     sigma = 3.405;
     b = b/sigma;
     eV = 1.60217646 * pow(10.0, -19.0);
@@ -19,22 +25,46 @@ GenerateQuantities::GenerateQuantities(string Termostat)
     T0 = 119.74;
     L = b*N;
     volume = L * L * L;
-    density = volume/N_tot;
     r1 = zeros(3);
     r2 = zeros(3);
     drvec = zeros(3);
     force = zeros(3);
+    radius_grense = 2;
+    pi = acos(-1.0);
+    Permeability_Counter_pluss = 0;
+    Permeability_Counter_minus = 0;
+    FlowF << 0 << 0 << 0.1;
+    r_cut = 3;
+    dt = 0.005;
 
     //Input
-    Temp = 100.0;
-    T_bath = 0.851*T0;
-    r_cut = 3;
-    time_steps = 1000;
-    dt = 0.005;
+
+    //Temperatur
+    Temp = 1.5*T0;
+    T_bath = 1.5*T0;
+    time_steps = 2000;
     relaxation_time = 15*dt;
-    termostat_limit = 500;
+    termostat_limit = 1000; //Må settes til 0 hvis ingen termostat !!!
+
+    //Porer
+    who_moves = true; // True = inni porene, False = utenfor porene
+    who_moves_not = false; //False = inni porene, True = utenfor porene
+    Sylindric_or_circle = true; //True gir sylinder-porer langs z retning, false gir kule-porer
+    number_of_pores = 1;
+    senter_pore = true;
+    PORER_INNI_TITSLOOPEN = false;
+    Radius_Reskalering = 2; //Verdi 1 her gir riktig størrelse på porer, større verdi gir mindre porer
+
+    //Flow
+    nflow = 35;
+    Lfc = L / nflow;
+    nFlowCells = nflow * nflow * nflow;
+    FlowF *= 50; //Øke kraften litt
+    flow_on_off = true; //True gir flow, false gir ikke flow.
+    Patrykt_Kraft_Retning = 2; // 0 = x retning, 1 = y retning, 2 = z retning
 
     //Reskalering;
+    density = volume/N_tot;
     Temp /= T0;
     T_bath /= T0;
     standev = sqrt(Temp);
@@ -44,6 +74,19 @@ GenerateQuantities::GenerateQuantities(string Termostat)
     idum = -1;
     thermostat = Termostat;
     andersen_std = sqrt(T_bath);
+    if (senter_pore == true){
+        number_of_pores = 1;}
+    if (flow_on_off == false){
+        FlowF(0) = 0;
+        FlowF(1) = 0;
+        FlowF(2) = 0;
+    }
+
+    //Pressure cells
+    nLpc = 10;//(int) b*N;
+    Lpc = L / nLpc;
+    nPressCells = nLpc * nLpc * nLpc;
+    volumePressCells = Lpc * Lpc * Lpc;
 }
 
 double GenerateQuantities::NormalDist(long *idum)
@@ -63,11 +106,17 @@ void GenerateQuantities::PrintToFile()
 {
     ofstream myfile ("Argon6.xyz", ios_base::app);
     if (myfile.is_open()){
-        myfile << N_tot << endl;
+        myfile << atoms.size() << endl;
         myfile << "Argon atomer beveger seg" << endl;
 
         for (i = 0; i < atoms.size(); i++){
             Atom *A = atoms[i];
+            if (A->ismoving == false){
+                atom_name = "O";
+            }
+            if (A->ismoving == true){
+                atom_name = "Ar";
+            }
             myfile << atom_name << " " << A->getPosition()(0) << " " <<  A->getPosition()(1) << " " << A->getPosition()(2) << endl;
         }
         myfile.close();
@@ -91,7 +140,24 @@ void GenerateQuantities::printVelocity()
      else{
          cout << "open file dude" << endl;
      }
- }
+}
+
+void GenerateQuantities::printPressure(const vec &pressss)
+{
+    ofstream pressfil ("Pressure.txt", ios_base::app);
+    if (pressfil.is_open()){
+        for (i=0; i < nPressCells; i++){
+            pressfil << pressss(i) << " ";
+        }
+    pressfil << endl;
+    }
+    else{
+        cout << "open file dude" << endl;
+    }
+    pressfil.close();
+}
+
+
 
 
 void GenerateQuantities::generatePosition()
@@ -164,9 +230,9 @@ void GenerateQuantities::generateVelocity()
         velocitySum += A->getVelocity();
     }
 
-    velocitySum /= N_tot;
+    velocitySum /= atoms.size();
 
-    for (i = 0; i<atoms.size(); i++){
+    for (i = 0; i< atoms.size(); i++){
         Atom* A = atoms.at(i);
         velocity = A->getVelocity() - velocitySum;
         A->setVelocity(velocity);
@@ -212,6 +278,7 @@ void GenerateQuantities::generateForce()
             atoms[j]->setPotential(Epot);
 
             atoms[i]->setPressure(dWork);
+            atoms[j]->setPressure(dWork);
         }
     }
 }
@@ -222,8 +289,10 @@ void GenerateQuantities::generateCells()
     int nBins = 10;
     double Epot, kinetic, press;
 
+    ofstream Utinfo ("FlowProfile.txt");
+    ofstream Utinfo2("FlowProfile2.txt");
+    pressCells = new PressureCells[nPressCells];
     cells = new Cell[nCells];
-
     vec r(3);
     vec d(3);
     vec cellIndices(3);
@@ -241,9 +310,220 @@ void GenerateQuantities::generateCells()
     vec displacement(time_steps);
     vec bins(nBins);
     vec DConstant(time_steps);
+    int test;
+    double RADIUS;
+    vec Pore_Radiusses(number_of_pores);
 
+    //Pressurecellslister
+    vec local_kinetic_energy(nPressCells);
+    vec local_pressure(nPressCells);
+    vec cellPressure(nPressCells);
+
+    //Andre ting
     mat Index_Matrix;
     Index_Matrix = zeros<mat>(3,27);
+
+    //Flow celler
+    int rawNumber = nFlowCells - nflow;
+    flowCells = new FlowProfileCells[nFlowCells];
+    vec flowVelocityx = zeros(nflow*nflow);
+    vec flowVelocityy = zeros(nflow*nflow);
+    vec flowVelocityz = zeros(nflow*nflow);
+    vec counter = zeros(nflow*nflow);
+
+    //Initialiserer alle atomene i porer
+
+    if (PORER_INNI_TITSLOOPEN == true){
+        for (i = 0; i < atoms.size(); i++){
+            Atom *atom = atoms[i];
+            atom->ismoving = who_moves;
+        }
+    }
+
+
+    if (PORER_INNI_TITSLOOPEN == false){
+        for (i = 0; i < atoms.size(); i++){
+            Atom *atom = atoms[i];
+            atom->ismoving = who_moves_not;
+        }
+
+
+    //For hver pore
+    Porosity = 0;
+    for(j = 0; j < number_of_pores; j++){
+        test = 1;
+        vec rr2(3);
+        while (test != 0){
+            test = 0;
+
+            //Lager sentrum til poren
+
+            if (senter_pore == false){
+            for (k = 0; k<3; k++){
+                rr2(k) = L*ran0(&idum);}
+            cout << "Sentrum i poren: " << endl << rr2;
+            }
+
+            if (senter_pore == true){
+            for (k=0; k<3;k++){
+                rr2(k) = L/2;}
+            cout << "Sentrum i poren: " << endl << rr2;
+            }
+
+            //Lager radius til poren
+            RADIUS = ran0(&idum) + radius_grense;
+            RADIUS *= 10;
+            RADIUS /= sigma;
+            RADIUS /= Radius_Reskalering;
+            cout << "Radius = " << RADIUS << endl;
+            Pore_Radiusses(j) = RADIUS;
+
+            //Sjekker at poren ikke går inn i noen andre porer
+            for (i=0; i < atoms.size(); i++){
+
+                //Hvert atom
+
+                //For kule-porer
+                if (Sylindric_or_circle == false){
+                Atom *atom = atoms[i];
+                vec rr1(3);
+                vec drr(3);
+
+                rr1 = atom->getPosition();
+                drr = rr1 - rr2;
+
+                    for(k = 0; k<3; k++)
+                    {
+                        if(abs(drr(k)-L) < abs(drr(k)))
+                        {
+                             drr(k) = drr(k) - L;
+                        }
+                        if(abs(drr(k)+L) < abs(drr(k)))
+                        {
+                           drr(k) = drr(k) + L;
+                        }
+                    }
+
+                    //Sjekker at vi ikke beveger oss
+                    if (norm(drr, 2) <= RADIUS){
+                        if (atom->ismoving == who_moves){
+                            test = 1;
+                        }
+                    }
+                }
+
+                //For sylinderporer
+                else if(Sylindric_or_circle == true){
+                    Atom *atom = atoms[i];
+
+                    vec rr1(3);
+                    vec ddr(3);
+                    rr1 = atom->getPosition();
+                    ddr = rr1 - rr2;
+
+                    vec rr12d(2);
+                    vec ddr2d(2);
+
+                    rr12d << rr1(0) << rr1(0);
+                    ddr2d << ddr(0) << ddr(1);
+
+                    for (k = 0; k < 2; k++){
+                        if (abs(ddr2d(k) - L) < abs(ddr2d(k))){
+                            ddr2d(k) = ddr2d(k) - L;
+                        }
+
+                        if (abs(ddr2d(k) + L) < abs(ddr2d(k))){
+                            ddr2d(k) = ddr2d(k) + L;
+                        }
+                    }
+
+                    //Sjekker at vi ikke beveger oss
+                    if (norm(ddr2d,2) <= RADIUS){
+                        if (atom->ismoving == who_moves){
+                            test = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        cout << "Pore nummer " << j+1 << " is completed!" << endl;
+
+        if (Sylindric_or_circle == false){
+            Porosity += pow(RADIUS, 3.0);
+        }
+
+        else if (Sylindric_or_circle == true){
+            Porosity += pow(RADIUS, 2.0);
+        }
+
+        //Atomene i denne poren beveger seg ikke
+        for (i=0; i < atoms.size(); i++){
+            Atom *atom = atoms[i];
+
+            if (Sylindric_or_circle == false){
+                vec rr1(3);
+                rr1 = atom->getPosition();
+                vec drr(3);
+                drr = rr1 - rr2;
+
+                for(int k = 0; k<3; k++)
+                {
+                    if(abs(drr(k)-L) < abs(drr(k)))
+                    {
+                         drr(k) = drr(k) - L;
+                    }
+                    if(abs(drr(k)+L) < abs(drr(k)))
+                    {
+                        drr(k) = drr(k) + L;
+                    }
+                }
+
+                if (norm(drr, 2) <= RADIUS){
+                    atom->ismoving = who_moves;
+                }
+            }
+
+            else if (Sylindric_or_circle == true){
+                vec rr1(3);
+                rr1 = atom->getPosition();
+                vec drr(3);
+                drr = rr1-rr2;
+
+                vec rr12d(2);
+                vec ddr2d(2);
+
+                rr12d << rr1(0) << rr1(1);
+                ddr2d << drr(0) << drr(1);
+
+                for (k = 0; k < 2; k++){
+                    if (abs(ddr2d(k) - L) < abs(ddr2d(k))){
+                        ddr2d(k) = ddr2d(k) - L;
+                    }
+
+                    if (abs(ddr2d(k) + L) < abs(ddr2d(k))){
+                        ddr2d(k) = ddr2d(k) + L;
+                    }
+                }
+
+                if (norm(ddr2d,2) <= RADIUS){
+                    atom->ismoving = who_moves;
+                }
+            }
+        }
+    }
+
+    if (Sylindric_or_circle == false){
+        Porosity = Porosity * 4 / 3 * pi;
+    }
+
+    else if (Sylindric_or_circle == true){
+        Porosity = Porosity * pi * L;
+    }
+    Porosity /= volume;
+
+    cout << "Porosity = " << Porosity << endl;
+    }
 
     //Lager cellene. Hver celle får et nummer og har 3 indekser som gir posisjonen til cella.
     int cellNum = 0;
@@ -252,6 +532,34 @@ void GenerateQuantities::generateCells()
             for (k = 0; k < Lc; k++){
                 cells[cellNum].cellIndices << i << j << k;
                 cellNum++;
+            }
+        }
+    }
+
+    //Generate flowprofilecells
+    int flowCellNumber = 0;
+            for(int i = 0; i < nflow; i++)
+            {
+                for(int j = 0; j < nflow; j++)
+                {
+                    for(int k = 0; k < nflow; k++)
+                    {
+                        flowCells[flowCellNumber].cell_Index << i << j << k;
+                        flowCellNumber++;
+                    }
+                }
+            }
+
+    // Generate the pressure cells
+    int pressCellNumber = 0;
+    for(int i = 0; i < nLpc; i++)
+    {
+        for(int j = 0; j < nLpc; j++)
+        {
+            for(int k = 0; k < nLpc; k++)
+            {
+                pressCells[pressCellNumber].cell_index << i << j << k;
+                pressCellNumber++;
             }
         }
     }
@@ -312,10 +620,31 @@ void GenerateQuantities::generateCells()
         }
     }
 
+    //Setter atomene i pressure cells
+    for(i = 0; i < atoms.size(); i++)
+    {
+        r = atoms[i]->getPosition();
+        ix = int (r(0)/Lpc);
+        iy = int (r(1)/Lpc);
+        iz = int (r(2)/Lpc);
+        cellIndices << ix << iy << iz;
+        for(j = 0; j < nPressCells; j++)
+        {
+            if(pressCells[j].cell_index(0)==cellIndices(0) &&
+                    pressCells[j].cell_index(1)==cellIndices(1) &&
+                    pressCells[j].cell_index(2)==cellIndices(2))
+            {
+                pressCells[j].addAtoms(atoms[i]);
+            }
+        }
+    }
+
     //Legger dem til i listene
 
     generateForce();
-    PrintToFile();
+    if (PORER_INNI_TITSLOOPEN==false){
+        PrintToFile();
+    }
 
     //Initialiserer g(r)
     for (i = 0; i<nBins; i++){
@@ -336,11 +665,28 @@ void GenerateQuantities::generateCells()
         pressure(0) += atom->getPressure();
     }
 
-    temperature(0) = (kinetic_energy(0)) / (3.0 * N_tot);
+    temperature(0) = (kinetic_energy(0)) / (3.0 * atoms.size());
     kinetic_energy(0) *= 0.5;
     potential_energy(0) *= 4;
     total_energy(0) = kinetic_energy(0) + potential_energy(0);
-    pressure(0) = density * temperature(0) + pressure(0) / (3.0*volume);
+    pressure(0) = density * temperature(0) + pressure(0) / (2.0*3.0*volume);
+
+
+    //Regner trykket internt i pressurecellene
+    for(int cellNumber = 0; cellNumber < nPressCells; cellNumber++)
+    {
+        local_kinetic_energy(cellNumber) = 0.0;
+        local_pressure(cellNumber) = 0.0;
+        for(int i = 0; i < (pressCells[cellNumber].atoms).size(); i++)
+        {
+            local_kinetic_energy(cellNumber) += dot(pressCells[cellNumber].atoms[i]->getVelocity(), pressCells[cellNumber].atoms[i]->getVelocity());
+            local_pressure(cellNumber) += pressCells[cellNumber].atoms[i]->getPressure();
+        }
+        cellPressure(cellNumber) = ( local_kinetic_energy(cellNumber) + local_pressure(cellNumber));
+        cellPressure(cellNumber) /= (3 * volumePressCells);
+    }
+    printPressure(cellPressure);
+
 
     //***************************************
     //Tidsutvikling
@@ -349,34 +695,83 @@ void GenerateQuantities::generateCells()
     for (t = 1; t < time_steps; t++){
         cout << "Timestep number:" << t << endl;
 
+        //Skrur av flowen etter en gitt tid.
+        if (t == termostat_limit)
+        {
+            FlowF(2) = 0;
+        }
+
         //Kalkulerer temp velocity og nye posisjoner for hvert atom
         for (cellNum = 0; cellNum < nCells; cellNum++){
             for (j = 0; j < (cells[cellNum].atoms).size(); j++){
+                if (cells[cellNum].atoms[j]->ismoving == who_moves){
                 force = cells[cellNum].atoms[j]->getForce();
                 tempVelocity = cells[cellNum].atoms[j]->getVelocity() + 0.5 * force * dt;
+
                 oldPosition = cells[cellNum].atoms[j]->getPosition();
                 newPosition = oldPosition + tempVelocity * dt;
                 d = newPosition - oldPosition;
+                    for (k=0; k<3; k++){
+                        if (newPosition(k) > L){
+                            newPosition(k) -= L;
+                            if (k == Patrykt_Kraft_Retning){
+                                Permeability_Counter_minus += 1;
+                                if (t > termostat_limit){
+                                    Utinfo << cells[cellNum].atoms[j]->getPosition()(0) << " " << cells[cellNum].atoms[j]->getPosition()(1) << " " << cells[cellNum].atoms[j]->getPosition()(2) << " " <<  cells[cellNum].atoms[j]->getVelocity()(0) << " "  <<  cells[cellNum].atoms[j]->getVelocity()(1) << " "  <<  cells[cellNum].atoms[j]->getVelocity()(2) << " " << endl;
+                                }
+                            }
+                        }
+                        if (newPosition(k) < 0){
+                            newPosition(k) += L;
+                            if (k == Patrykt_Kraft_Retning){
+                                Permeability_Counter_pluss += 1;
+                                if (t > termostat_limit){
+                                    Utinfo2 << cells[cellNum].atoms[j]->getPosition()(0) << " " << cells[cellNum].atoms[j]->getPosition()(1) << " " << cells[cellNum].atoms[j]->getPosition()(2) << " " <<  cells[cellNum].atoms[j]->getVelocity()(0) << " "  <<  cells[cellNum].atoms[j]->getVelocity()(1) << " "  <<  cells[cellNum].atoms[j]->getVelocity()(2) << " " << endl;
+                                }
+                            }
+                        }
+                    }
 
-                for (k=0; k<3; k++){
-                    if (newPosition(k) > L){
-                        newPosition(k) -= L;
-                    }
-                    if (newPosition(k) < 0){
-                        newPosition(k) += L;
-                    }
+                    cells[cellNum].atoms[j]->setDisplacement(d);
+                    cells[cellNum].atoms[j]->setPosition(newPosition);
+                    cells[cellNum].atoms[j]->setVelocity(tempVelocity);
                 }
-
-                cells[cellNum].atoms[j]->setPosition(newPosition);
-                cells[cellNum].atoms[j]->setVelocity(tempVelocity);
-
-                cells[cellNum].atoms[j]->setDisplacement(d);
             }
         }
 
     //Klarerer cellene
     for (cellNum = 0; cellNum < nCells; cellNum++){
         cells[cellNum].atoms.clear();
+    }
+
+    //Klarerer flowcellene
+    for(int cellNumber = 0; cellNumber < nFlowCells; cellNumber++)
+    {
+        flowCells[cellNumber].atoms.clear();
+    }
+
+    // Set atoms in flow profile cells
+        for(int i = 0; i < atoms.size(); i++)
+        {
+            r = atoms[i]->getPosition();
+            ix = int (r(0)/Lfc);
+            iy = int (r(1)/Lfc);
+            iz = int (r(2)/Lfc);
+            cellIndices << ix << iy << iz;
+            for(int j = 0; j < nFlowCells; j++)
+            {
+                if(flowCells[j].cell_Index(0)==cellIndices(0) &&
+                        flowCells[j].cell_Index(1)==cellIndices(1) &&
+                        flowCells[j].cell_Index(2)==cellIndices(2))
+                {
+                    flowCells[j].addAtoms(atoms[i]);
+                }
+            }
+        }
+
+    //Klarerer pressurecellene
+    for (int cellNumber = 0; cellNumber < nPressCells; cellNumber++){
+        pressCells[cellNumber].atoms.clear();
     }
 
     //Setter atomer inn i cellene
@@ -398,20 +793,22 @@ void GenerateQuantities::generateCells()
         }
     }
 
-    //Resetter kreftene og fysiske størrelser
+    //Resetter kreftene og fysiske størrelser og setter på flow
+    kinetic = 0.0;
     for (cellNum = 0; cellNum < nCells; cellNum++){
         cells[cellNum].hasCalculated = false;
         for (j = 0; j < (cells[cellNum].atoms).size(); j++){
             Atom *atom = cells[cellNum].atoms[j];
-            force = atom->getForce();
-            cells[cellNum].atoms[j]->setForce(-force);
-
-            Epot = atom->getPotential();
-            kinetic = 0.0;
-            press = 0.0;
-            cells[cellNum].atoms[j]->setPotential(-Epot);
+            if (atom->ismoving == who_moves){
+                force = atom->getForce();
+                cells[cellNum].atoms[j]->setForce(-force);
+                cells[cellNum].atoms[j]->setForce(FlowF);
+                Epot = atom->getPotential();
+                press = 0.0;
+                cells[cellNum].atoms[j]->setPotential(-Epot);
+                cells[cellNum].atoms[j]->setPressure(press);
+            }
             cells[cellNum].atoms[j]->setKinetic(kinetic);
-            cells[cellNum].atoms[j]->setPressure(press);
         }
     }
 
@@ -421,7 +818,8 @@ void GenerateQuantities::generateCells()
             for (j = i+1; j < (cells[cellNum].atoms).size(); j++){
                 Atom *atom1 = cells[cellNum].atoms[i];
                 Atom *atom2 = cells[cellNum].atoms[j];
-                acceleration(atom1, atom2);
+                if (atom1->ismoving == who_moves || atom2->ismoving == who_moves){
+                    acceleration(atom1, atom2);}
             }
         }
 
@@ -434,7 +832,9 @@ void GenerateQuantities::generateCells()
                     for (j = 0; j < (neighbor->atoms).size(); j++){
                         Atom *atom1 = cells[cellNum].atoms[i];
                         Atom *atom2 = neighbor->atoms[j];
-                        acceleration(atom1, atom2);
+                        if (atom1->ismoving == who_moves || atom2->ismoving == who_moves){
+                            acceleration(atom1, atom2);
+                        }
                     }
                 }
             }
@@ -447,12 +847,37 @@ void GenerateQuantities::generateCells()
         for (j = 0; j < (cells[cellNum].atoms).size(); j++){
             Atom *atom = cells[cellNum].atoms[j];
 
-            newVelocity = atom->getVelocity() + 0.5*atom->getForce()* dt;
-            cells[cellNum].atoms[j]->setVelocity(newVelocity);
-
-            cells[cellNum].atoms[j]->setKinetic(dot(newVelocity, newVelocity));
+            if (atom->ismoving == who_moves){
+                newVelocity = atom->getVelocity() + 0.5*atom->getForce()* dt;
+                cells[cellNum].atoms[j]->setVelocity(newVelocity);
+                cells[cellNum].atoms[j]->setKinetic(dot(newVelocity, newVelocity));
+            }
         }
     }
+
+
+    // Calculate the flow profile in flow profile cells
+        if(t >= termostat_limit)
+        {
+            int l = 0;
+            for(int raw = 0; raw < rawNumber; raw+=nflow)
+            {
+                for(int j = raw; j < (nflow + raw); j++)
+                {
+                    for(int k = 0; k < (flowCells[j].atoms).size(); k++)
+                    {
+                        if(flowCells[j].atoms[k]->ismoving == who_moves)
+                        {
+                            flowVelocityx[l] += flowCells[j].atoms[k]->getVelocity()(0);
+                            flowVelocityy[l] += flowCells[j].atoms[k]->getVelocity()(1);
+                            flowVelocityz[l] += flowCells[j].atoms[k]->getVelocity()(2);
+                            counter[l] +=1;
+                        }
+                    }
+                }
+                l +=1;
+            }
+        }
 
     //Finner g(r)
     for (i= 0; i< atoms.size(); i++){
@@ -474,7 +899,18 @@ void GenerateQuantities::generateCells()
     pressure(t)         = 0.0;
     displacement(t)     = 0.0;
 
-    for(int i = 0; i < atoms.size(); i++)
+    //Resetter kreftene og pressure for atomer som IKKE beveger seg
+    for (i=0; i < atoms.size(); i++){
+        Atom *A = atoms[i];
+        if (A->ismoving != who_moves){
+            Reset_Force1 = A->getForce();
+            A->setPressure(0);
+            A->setForce(-Reset_Force1);
+        }
+    }
+
+    //Finner fysiske størrelser inni tidsloopen
+    for(i = 0; i < atoms.size(); i++)
     {
         kinetic_energy(t) += atoms[i]->getKinetic();
         potential_energy(t) += atoms[i]->getPotential();
@@ -483,12 +919,228 @@ void GenerateQuantities::generateCells()
     }
 
     potential_energy(t) *= 4;
-    temperature(t) = kinetic_energy(t)/(3.0 * N_tot);
+    temperature(t) = kinetic_energy(t)/(3.0 * atoms.size());
     kinetic_energy(t) *= 0.5;
     total_energy(t) = kinetic_energy(t) + potential_energy(t);
-    pressure(t) = density * temperature(t) + pressure(t) / (3.0 * volume);
-    displacement(t) /= N_tot;
+
+    pressure(t) = density * temperature(t) + pressure(t) / (6.0 * volume);
+    displacement(t) /= atoms.size();
     DConstant(t) = displacement(t)/(6*t);
+
+
+    //Setter atomene i pressure cells
+    for(int i = 0; i < atoms.size(); i++)
+    {
+        r = atoms[i]->getPosition();
+        ix = int (r(0)/Lpc);
+        iy = int (r(1)/Lpc);
+        iz = int (r(2)/Lpc);
+        cellIndices << ix << iy << iz;
+        for(int j = 0; j < nPressCells; j++)
+        {
+            if(pressCells[j].cell_index(0)==cellIndices(0) &&
+                    pressCells[j].cell_index(1)==cellIndices(1) &&
+                    pressCells[j].cell_index(2)==cellIndices(2))
+            {
+                pressCells[j].addAtoms(atoms[i]);
+            }
+        }
+    }
+
+    //Regner trykket internt i pressurecellene
+    for(int cellNumber = 0; cellNumber < nPressCells; cellNumber++)
+    {
+        local_kinetic_energy(cellNumber) = 0.0;
+        local_pressure(cellNumber) = 0.0;
+        for(int i = 0; i < (pressCells[cellNumber].atoms).size(); i++)
+        {
+            if (pressCells[cellNumber].atoms[i]->ismoving == who_moves){
+                local_kinetic_energy(cellNumber) += pressCells[cellNumber].atoms[i]->getKinetic();
+                local_pressure(cellNumber) += pressCells[cellNumber].atoms[i]->getPressure();
+            }
+        }
+        cellPressure(cellNumber) = ( local_kinetic_energy(cellNumber) + local_pressure(cellNumber));
+        cellPressure(cellNumber) /= (3 * volumePressCells);
+    }
+
+    printPressure(cellPressure);
+    /////////////////////////////////////////////////////////
+
+    //Hvis vi setter porene inni tidsloopen
+    if (PORER_INNI_TITSLOOPEN == true){
+    if (t == termostat_limit){
+
+        for (i = 0; i < atoms.size(); i++){
+            Atom *atom = atoms[i];
+            atom->ismoving = who_moves_not;
+        }
+
+
+    //For hver pore
+    Porosity = 0;
+    for(j = 0; j < number_of_pores; j++){
+        test = 1;
+        vec rr2(3);
+        while (test != 0){
+            test = 0;
+
+            //Lager sentrum til poren
+            for (k = 0; k<3; k++){
+                rr2(k) = L*ran0(&idum);}
+
+            //Lager radius til poren
+            RADIUS = ran0(&idum) + radius_grense;
+            RADIUS *= 10;
+            RADIUS /= sigma;
+            RADIUS /= Radius_Reskalering;
+            Pore_Radiusses(j) = RADIUS;
+
+            //Sjekker at poren ikke går inn i noen andre porer
+            for (i=0; i < atoms.size(); i++){
+
+                //Hvert atom
+                //For kule-porer
+                if (Sylindric_or_circle == false){
+                Atom *atom = atoms[i];
+                vec rr1(3);
+                vec drr(3);
+
+                rr1 = atom->getPosition();
+                drr = rr1 - rr2;
+
+                    for(k = 0; k<3; k++)
+                    {
+                        if(abs(drr(k)-L) < abs(drr(k)))
+                        {
+                             drr(k) = drr(k) - L;
+                        }
+                        if(abs(drr(k)+L) < abs(drr(k)))
+                        {
+                           drr(k) = drr(k) + L;
+                        }
+                    }
+
+                    //Sjekker om vi beveger oss
+                    if (norm(drr, 2) <= RADIUS){
+                        if (atom->ismoving == who_moves){
+                            test = 1;
+                        }
+                    }
+                }
+
+                //For sylinderporer
+                else if(Sylindric_or_circle == true){
+                    Atom *atom = atoms[i];
+
+                    vec rr1(3);
+                    vec ddr(3);
+                    rr1 = atom->getPosition();
+                    ddr = rr1 - rr2;
+
+                    vec rr12d(2);
+                    vec ddr2d(2);
+
+                    rr12d << rr1(0) << rr1(0);
+                    ddr2d << ddr(0) << ddr(1);
+
+                    for (k = 0; k < 2; k++){
+                        if (abs(ddr2d(k) - L) < abs(ddr2d(k))){
+                            ddr2d(k) = ddr2d(k) - L;
+                        }
+
+                        if (abs(ddr2d(k) + L) < abs(ddr2d(k))){
+                            ddr2d(k) = ddr2d(k) + L;
+                        }
+                    }
+
+                    //Sjekker om vi beveger oss
+                    if (norm(ddr2d,2) <= RADIUS){
+                        if (atom->ismoving == who_moves){
+                            test = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        cout << "Pore nummer " << j+1 << " is completed!" << endl;
+
+        if (Sylindric_or_circle == false){
+            Porosity += pow(RADIUS, 3.0);
+        }
+
+        else if (Sylindric_or_circle == true){
+            Porosity += pow(RADIUS, 2.0);
+        }
+
+        //Atomene i denne poren beveger seg ikke
+        for (i=0; i < atoms.size(); i++){
+            Atom *atom = atoms[i];
+
+            if (Sylindric_or_circle == false){
+                vec rr1(3);
+                rr1 = atom->getPosition();
+                vec drr(3);
+                drr = rr1 - rr2;
+
+                for(int k = 0; k<3; k++)
+                {
+                    if(abs(drr(k)-L) < abs(drr(k)))
+                    {
+                         drr(k) = drr(k) - L;
+                    }
+                    if(abs(drr(k)+L) < abs(drr(k)))
+                    {
+                        drr(k) = drr(k) + L;
+                    }
+                }
+
+                if (norm(drr, 2) <= RADIUS){
+                    atom->ismoving = who_moves;
+                }
+            }
+
+            else if (Sylindric_or_circle == true){
+                vec rr1(3);
+                rr1 = atom->getPosition();
+                vec drr(3);
+                drr = rr1-rr2;
+
+                vec rr12d(2);
+                vec ddr2d(2);
+
+                rr12d << rr1(0) << rr1(1);
+                ddr2d << drr(0) << drr(1);
+
+                for (k = 0; k < 2; k++){
+                    if (abs(ddr2d(k) - L) < abs(ddr2d(k))){
+                        ddr2d(k) = ddr2d(k) - L;
+                    }
+
+                    if (abs(ddr2d(k) + L) < abs(ddr2d(k))){
+                        ddr2d(k) = ddr2d(k) + L;
+                    }
+                }
+
+                if (norm(ddr2d,2) <= RADIUS){
+                    atom->ismoving = who_moves;
+                }
+            }
+        }
+    }
+
+    if (Sylindric_or_circle == false){
+        Porosity = Porosity * 4 / 3 * pi;
+    }
+
+    else if (Sylindric_or_circle == true){
+        Porosity = Porosity * pi * L;
+    }
+    Porosity /= volume;
+
+    cout << "Porosity = " << Porosity << endl;
+    }}
+    //////////////////////////
 
     //Bruker termostaten
     if (thermostat == "noThermostat"){}
@@ -521,22 +1173,41 @@ void GenerateQuantities::generateCells()
         }
     }
 
+        if (PORER_INNI_TITSLOOPEN == true){
+            if (t >= termostat_limit){
+                PrintToFile();
+            }
+        }
 
-    PrintToFile();
+
+        else{
+            PrintToFile();
+        }
     }
+
 
     //****************************************
     //Slutt på tidsloopen
     //****************************************
 
+    Utinfo.close();
+    Utinfo2.close();
+
+    double Permeability;
+    double r_sum_squared=0;
+    for (j = 0; j < number_of_pores; j++){
+        r_sum_squared += Pore_Radiusses(j) * Pore_Radiusses(j);
+    }
+    Permeability = Porosity * r_sum_squared / 8;
+    cout << "Permeability = " << Permeability*sigma*sigma << endl;
+
 
     //g(r) normalisering
     for (i = 0; i < nBins; i++){
-        bins(i) /= (time_steps*N_tot*N_tot);
+        bins(i) /= (time_steps*atoms.size()*atoms.size());
     }
 
     //Skriver ut fysiske egenskaper
-
 
     // Write dynamical properties to file
     ofstream myfilz ("Energy.txt");
@@ -563,6 +1234,27 @@ void GenerateQuantities::generateCells()
     else cout << "Unable to open file";
 
     printVelocity();
+    cout << "Permeability counter pluss kom til: " << Permeability_Counter_pluss << endl;
+    cout << "Permeability counter minus kom til: " << Permeability_Counter_minus << endl;
+    cout << "Porøsitet var: " << Porosity << endl;
+
+    //Printe flow cellene
+    ofstream ofil ("FlowProfile.txt");
+    if (ofil.is_open())
+    {
+        for(int l = 0; l < nflow*nflow; l++)
+        {
+            if(counter[l] == 0)
+            {
+                ofil << flowVelocityx[l] <<" " << flowVelocityy[l] <<" "<< flowVelocityz[l]<<endl;
+            }else{
+                ofil << flowVelocityx[l]/counter[l] <<" " << flowVelocityy[l]/counter[l] <<" "<< flowVelocityz[l]/counter[l] <<endl;
+            }
+        }
+        ofil.close();
+    }
+    else cout << "Unable to open file";
+
 }
 
 void GenerateQuantities::acceleration(Atom *atom1, Atom *atom2)
@@ -585,9 +1277,15 @@ void GenerateQuantities::acceleration(Atom *atom1, Atom *atom2)
         }
     }
 
-    Ep = (pow(norm(drvec,2), -3.0) - 1)*pow(norm(drvec,2), -3.0);
-    p = dot(force, drvec);
+    double normtemp = norm(drvec,2.0);
+
+    normtemp = 1/(normtemp*normtemp*normtemp);
+
+    Ep = (normtemp - 1)*normtemp;
+
     force = potential->Lennard_Jones_potential(drvec);
+
+    p = dot(force, drvec);
 
     atom1->setForce(force);
     atom2->setForce(-force);
@@ -596,8 +1294,7 @@ void GenerateQuantities::acceleration(Atom *atom1, Atom *atom2)
     atom2->setPotential(Ep);
 
     atom1->setPressure(p);
-    //atom2->setPressure(p);
-
+    atom2->setPressure(p);
 }
 
 void GenerateQuantities::ClearCells()
@@ -607,7 +1304,7 @@ void GenerateQuantities::ClearCells()
     }
 }
 
-double GenerateQuantities::                                                                                                                                                                                                                                                         F(Atom *atom1, Atom *atom2)
+double GenerateQuantities::radialDF(Atom *atom1, Atom *atom2)
 {
     vec r1(3);
     vec r2(3);

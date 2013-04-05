@@ -8,8 +8,9 @@
 #include "lib.h"
 #include "potentials.h"
 #include "../../Desktop/FYS4460/include/armadillo"
-
-
+#include <cmath>
+#include "pressurecells.h"
+#include "flowprofilecells.h"
 
 using namespace std;
 using namespace arma;
@@ -22,6 +23,7 @@ public:
     double NormalDist(long *idum);
     void PrintToFile();
     void printVelocity();
+    void printPressure(const vec &pressss);
     void generatePosition();
     void generateVelocity();
     void generateForce();
@@ -36,14 +38,23 @@ public:
     double BerendsenThermostat(double Temperature);
     void AndersenThermostat(Atom *atom);
 
+    //Flow
+    vec3 FlowF;
+    bool flow_on_off;
+    bool Sylindric_or_circle;
+    int Permeability_Counter_pluss, Permeability_Counter_minus;
+    int Patrykt_Kraft_Retning;
+
 
 
 protected:
     //Krefter og posisjoner og hastigheter
     Cell* cells;
+    PressureCells* pressCells;
     vector<Atom*> atoms;
     Potentials* potential;
     double temporary;
+    double pi;
     int time_steps;
     int N, N_tot, Lc, nCells;
     int i,j,k,n,p,t;
@@ -60,16 +71,35 @@ protected:
     vec r2;
     vec drvec;
     vec force;
-
+    double radius_grense, Radius_Reskalering;
     int B;
-
+    mat Por_index;
+    bool who_moves;
+    double Porosity;
+    bool half_density;
     double density, volume;
-
+    vec3 Reset_Force1;
+    bool who_moves_not;
+    bool PORER_INNI_TITSLOOPEN;
+    int number_of_pores;
+    bool senter_pore;
 
     //Termostat
     string thermostat;
     double relaxation_time;
     double andersen_std;
+
+    //Pressure cellene
+    int nLpc;
+    double Lpc;
+    int nPressCells;
+    double volumePressCells;
+
+    //Flow profile
+    FlowProfileCells* flowCells;
+    int nFlowCells;
+    int nflow;
+    double Lfc;
 };
 
 #endif // GENERATEQUANTITIES_H
